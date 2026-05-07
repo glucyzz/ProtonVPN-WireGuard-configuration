@@ -15,15 +15,14 @@ from selenium.common.exceptions import TimeoutException, ElementClickIntercepted
 
 
 # --- Constants ---
-MODAL_BACKDROP_SELECTOR = (By.CLASS_NAME, "modal-two-backdrop")
-CONFIRM_BUTTON_SELECTOR = (By.CSS_SELECTOR, ".button-solid-norm:nth-child(2)")
-EXTEND_BTN_SELECTOR     = "button.button-outline-weak"   # <button class="button button-medium button-outline-weak">Extend</button>
-DOWNLOAD_DIR            = os.path.join(os.getcwd(), "downloaded_configs")
-SERVER_ID_LOG_FILE      = os.path.join(os.getcwd(), "downloaded_wg_ids.json")
+MODAL_BACKDROP_SELECTOR   = (By.CLASS_NAME, "modal-two-backdrop")
+CONFIRM_BUTTON_SELECTOR   = (By.CSS_SELECTOR, ".button-solid-norm:nth-child(2)")
+EXTEND_BTN_SELECTOR       = "button.button-outline-weak"
+DOWNLOAD_DIR              = os.path.join(os.getcwd(), "downloaded_configs")
+SERVER_ID_LOG_FILE        = os.path.join(os.getcwd(), "downloaded_wg_ids.json")
 MAX_DOWNLOADS_PER_SESSION = 20
 RELOGIN_DELAY             = 120
 
-# Environment variables
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -32,11 +31,10 @@ if not os.path.exists(DOWNLOAD_DIR):
 
 
 # ---------------------------------------------------------------------------
-# x-ui 转换工具函数（独立于 ProtonVPN 类，方便单独测试）
+# x-ui 转换工具函数
 # ---------------------------------------------------------------------------
 
 def _build_xui_entry(tag, private_key, address, public_key, allowed_ips, endpoint, keep_alive):
-    """组装一条标准 x-ui / Xray-core WireGuard outbound 对象。"""
     return {
         "protocol": "wireguard",
         "tag": tag,
@@ -58,15 +56,8 @@ def _build_xui_entry(tag, private_key, address, public_key, allowed_ips, endpoin
 
 def parse_conf_to_xui(conf_path):
     """
-    将一个 ProtonVPN WireGuard .conf 文件解析为 x-ui outbound 对象列表。
-
-    规则：
-    - Address 同时含 IPv4（含 .）和 IPv6（含 :）→ 生成两条：
-        tag "US-FREE#6-ipv4"  address=["10.2.0.2/32"]
-        tag "US-FREE#6-ipv6"  address=["2a07:b944::2:2/128"]
-    - 只有 IPv4 或只有 IPv6 → 生成一条，tag 不加后缀。
-    - IPv6 endpoint 从注释行 "# Endpoint = [2a02:...]:51820" 提取；
-      若不存在则 IPv6 版本复用 IPv4 endpoint。
+    将一个 ProtonVPN WireGuard .conf 解析为 x-ui outbound 对象列表。
+    双栈 → 生成 -ipv4 和 -ipv6 两条；单栈 → 一条。
     """
     try:
         with open(conf_path, "r", encoding="utf-8") as f:
@@ -116,27 +107,22 @@ def parse_conf_to_xui(conf_path):
         allowed_ips = [a.strip() for a in peer.get("allowedips", "0.0.0.0/0").split(",") if a.strip()]
         keep_alive  = int(peer.get("persistentkeepalive", 25))
 
-        results  = []
-        has_v4   = bool(ipv4_addrs)
-        has_v6   = bool(ipv6_addrs)
+        results       = []
+        has_v4, has_v6 = bool(ipv4_addrs), bool(ipv6_addrs)
 
         if has_v4 and has_v6:
-            results.append(_build_xui_entry(
-                f"{base_tag}-ipv4", private_key, ipv4_addrs,
-                public_key, allowed_ips, endpoint_v4, keep_alive))
+            results.append(_build_xui_entry(f"{base_tag}-ipv4", private_key, ipv4_addrs,
+                                             public_key, allowed_ips, endpoint_v4, keep_alive))
             endpoint_v6 = ipv6_endpoint_commented or endpoint_v4
-            results.append(_build_xui_entry(
-                f"{base_tag}-ipv6", private_key, ipv6_addrs,
-                public_key, allowed_ips, endpoint_v6, keep_alive))
+            results.append(_build_xui_entry(f"{base_tag}-ipv6", private_key, ipv6_addrs,
+                                             public_key, allowed_ips, endpoint_v6, keep_alive))
         elif has_v4:
-            results.append(_build_xui_entry(
-                base_tag, private_key, ipv4_addrs,
-                public_key, allowed_ips, endpoint_v4, keep_alive))
+            results.append(_build_xui_entry(base_tag, private_key, ipv4_addrs,
+                                             public_key, allowed_ips, endpoint_v4, keep_alive))
         elif has_v6:
             endpoint_v6 = ipv6_endpoint_commented or endpoint_v4
-            results.append(_build_xui_entry(
-                base_tag, private_key, ipv6_addrs,
-                public_key, allowed_ips, endpoint_v6, keep_alive))
+            results.append(_build_xui_entry(base_tag, private_key, ipv6_addrs,
+                                             public_key, allowed_ips, endpoint_v6, keep_alive))
         else:
             print(f"[xui] Skipping {conf_path} — no valid Address found.")
 
@@ -148,24 +134,11 @@ def parse_conf_to_xui(conf_path):
 
 
 def build_xui_into_zip(conf_dir, zipf):
-    """
-    遍历 conf_dir 所有 .conf，转换后写入 zipf 的 xui_outbounds/<CC>/<tag>.json。
-
-    ZIP 内结构示例：
-        xui_outbounds/
-        ├── US/
-        │   ├── US-FREE_6-ipv4.json
-        │   └── US-FREE_6-ipv6.json
-        └── NL/
-            └── NL_1.json
-
-    返回写入 JSON 文件总数。
-    """
+    """遍历所有 .conf，转换后写入 ZIP 的 xui_outbounds/<CC>/<tag>.json。"""
     total = 0
     for filename in sorted(os.listdir(conf_dir)):
         if not filename.endswith(".conf"):
             continue
-
         name_no_ext = filename.rsplit(".", 1)[0]
         clean_name  = re.sub(r"\s*\(\d+\)$", "", name_no_ext).strip().lower()
         prefix      = clean_name.replace("wg-", "")
@@ -182,6 +155,23 @@ def build_xui_into_zip(conf_dir, zipf):
 
     print(f"[xui] {total} JSON files written to xui_outbounds/.")
     return total
+
+
+# ---------------------------------------------------------------------------
+# 工具：JS 安全点击
+# 修复 "move target out of bounds" 和 headless 下 ActionChains 点击失效问题
+# ---------------------------------------------------------------------------
+
+def js_click(driver, element):
+    """
+    scrollIntoView 后用 JS .click()，完全绕开 ActionChains / move_to_element，
+    不受 headless 窗口尺寸限制。
+    """
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", element
+    )
+    time.sleep(0.3)
+    driver.execute_script("arguments[0].click();", element)
 
 
 # ---------------------------------------------------------------------------
@@ -253,19 +243,16 @@ class ProtonVPN:
             print(f"Error Login: {e}")
             return False
 
-    # ── 导航到 Downloads 页面（多选择器容错）────────────────────────────────────
+    # ── 导航到 Downloads（多选择器容错）─────────────────────────────────────────
     def navigate_to_downloads(self):
         selectors = [
             (By.XPATH,        "//a[contains(@href,'/downloads')]"),
-            (By.XPATH,        "//*[contains(@class,'navigation-item')]"
-                              "[.//*[contains(text(),'Download')]]"),
+            (By.XPATH,        "//*[contains(@class,'navigation-item')][.//*[contains(text(),'Download')]]"),
             (By.CSS_SELECTOR, ".navigation-item:nth-child(7) .text-ellipsis"),
         ]
         for loc in selectors:
             try:
-                WebDriverWait(self.driver, 8).until(
-                    EC.element_to_be_clickable(loc)
-                ).click()
+                WebDriverWait(self.driver, 8).until(EC.element_to_be_clickable(loc)).click()
                 time.sleep(2)
                 print("Navigated to Downloads page.")
                 return True
@@ -290,15 +277,13 @@ class ProtonVPN:
             except Exception:
                 return False
 
-    # ── ★ 批量续期所有 WireGuard 配置 ─────────────────────────────────────────
+    # ── ★ 批量续期（修复版）──────────────────────────────────────────────────────
     #
-    # 按钮真实 HTML：
-    #   <button class="button button-medium button-outline-weak"
-    #           aria-busy="false" type="button">Extend</button>
+    # 原问题：
+    #   1~12  ⚠ no dialog        → ActionChains 在 headless 下对视口外元素点击失效
+    #   13+   move target out of bounds → ActionChains 要求元素坐标在窗口范围内
     #
-    # 策略：
-    #   每次循环前重新查询按钮列表，用 index 定位当前按钮，
-    #   彻底避免 DOM 刷新后的 StaleElementReferenceException。
+    # 修复：统一改用 js_click()，完全绕开 ActionChains 视口坐标限制
     # ──────────────────────────────────────────────────────────────────────────
     def extend_all_wireguard_configs(self):
         print("\n--- Starting Extend All WireGuard Configs ---")
@@ -318,7 +303,7 @@ class ProtonVPN:
 
         for index in range(total):
             try:
-                # 每次重新获取，防止 StaleElement
+                # 每次重新查询，防止 StaleElementReferenceException
                 btns = self.driver.find_elements(By.CSS_SELECTOR, EXTEND_BTN_SELECTOR)
                 if index >= len(btns):
                     print(f"[Extend] Button #{index+1} no longer in DOM, stopping.")
@@ -326,32 +311,26 @@ class ProtonVPN:
 
                 btn = btns[index]
 
-                # 尝试读取配置名称用于日志
+                # 读取配置名称（日志用，失败不影响续期）
                 try:
-                    parent = btn.find_element(
+                    label = btn.find_element(
                         By.XPATH,
                         "./ancestor::*[.//*[contains(text(),'Config to connect')]]"
-                    )
-                    label = parent.find_element(
-                        By.XPATH, ".//*[contains(text(),'Config to connect')]"
+                        "//*[contains(text(),'Config to connect')]"
                     ).text.strip()
                 except Exception:
                     label = f"Config #{index + 1}"
 
-                # 滚动到按钮可见位置
-                self.driver.execute_script(
-                    "arguments[0].scrollIntoView({block: 'center'});", btn
-                )
-                time.sleep(0.4)
-
-                # 点击 Extend
-                ActionChains(self.driver).move_to_element(btn).click().perform()
+                # ★ JS 点击，绕开 ActionChains 视口限制
+                js_click(self.driver, btn)
 
                 # 等待确认弹窗并点击确认
                 try:
-                    WebDriverWait(self.driver, 15).until(
+                    confirm_btn = WebDriverWait(self.driver, 15).until(
                         EC.element_to_be_clickable(CONFIRM_BUTTON_SELECTOR)
-                    ).click()
+                    )
+                    js_click(self.driver, confirm_btn)
+
                     WebDriverWait(self.driver, 15).until(
                         EC.invisibility_of_element_located(MODAL_BACKDROP_SELECTOR)
                     )
@@ -361,7 +340,7 @@ class ProtonVPN:
                     time.sleep(delay)
 
                 except TimeoutException:
-                    # 弹窗未出现：配置可能刚续过或有冷却限制，跳过
+                    # 弹窗未出现：配置可能有冷却期，跳过
                     print(f"[Extend] ⚠ ({index+1}/{total}) {label} — no dialog, skipped")
                     try:
                         from selenium.webdriver.common.keys import Keys
@@ -428,14 +407,14 @@ class ProtonVPN:
                             btn          = row.find_element(By.CSS_SELECTOR, ".button")
                             random_delay = random.randint(60, 90)
 
-                            self.driver.execute_script(
-                                "arguments[0].scrollIntoView({block: 'center'});", btn
-                            )
-                            time.sleep(0.5)
-                            ActionChains(self.driver).move_to_element(btn).click().perform()
-                            WebDriverWait(self.driver, 30).until(
+                            # ★ 改用 js_click，与续期保持一致
+                            js_click(self.driver, btn)
+
+                            confirm_btn = WebDriverWait(self.driver, 30).until(
                                 EC.element_to_be_clickable(CONFIRM_BUTTON_SELECTOR)
-                            ).click()
+                            )
+                            js_click(self.driver, confirm_btn)
+
                             WebDriverWait(self.driver, 30).until(
                                 EC.invisibility_of_element_located(MODAL_BACKDROP_SELECTOR)
                             )
@@ -462,8 +441,6 @@ class ProtonVPN:
         print("\n###################### Organizing and Sending Files ######################")
 
         wg_files = {}
-
-        # 1. 解析并按国家分组 .conf 文件
         for filename in os.listdir(DOWNLOAD_DIR):
             if not filename.endswith(".conf"):
                 continue
@@ -490,17 +467,14 @@ class ProtonVPN:
         zip_path     = os.path.join(os.getcwd(), zip_filename)
 
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-
-            # 2. 原始 .conf 按国家写入 ZIP
+            # 原始 .conf 按国家写入 ZIP
             for country, files in wg_files.items():
                 for file_path in files:
                     archive_name = os.path.join(country, os.path.basename(file_path))
                     zipf.write(file_path, arcname=archive_name)
-
-            # 3. x-ui outbound JSON 写入 xui_outbounds/<CC>/<tag>.json
+            # x-ui outbound JSON
             xui_total = build_xui_into_zip(DOWNLOAD_DIR, zipf)
 
-        # 4. 发送到 Telegram
         if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
             caption = (
                 f"**New ProtonVPN WireGuard**\n\n"
@@ -516,11 +490,7 @@ class ProtonVPN:
                 with open(zip_path, "rb") as doc:
                     requests.post(
                         url,
-                        data={
-                            "chat_id":    TELEGRAM_CHAT_ID,
-                            "caption":    caption,
-                            "parse_mode": "Markdown",
-                        },
+                        data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "Markdown"},
                         files={"document": doc},
                     )
                 print(f"Sent {zip_filename} to Telegram.")
@@ -529,7 +499,6 @@ class ProtonVPN:
 
         # NOTE: os.remove(zip_path) 已永久移除，保留 ZIP 供 GitHub push 使用
 
-        # 5. 清理下载目录
         print("Cleaning up downloaded files...")
         for file in glob.glob(os.path.join(DOWNLOAD_DIR, "*")):
             os.remove(file)
@@ -546,7 +515,7 @@ class ProtonVPN:
                 session += 1
                 self.setup()
                 if self.login(username, password) and self.navigate_to_downloads():
-                    # ★ 先批量续期，再下载
+                    # 先批量续期，再下载
                     self.extend_all_wireguard_configs()
                     wg_done, wg_ids = self.process_wireguard_downloads(wg_ids)
                     self.save_downloaded_ids(wg_ids)
