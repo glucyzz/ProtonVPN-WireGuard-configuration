@@ -17,7 +17,7 @@ from selenium.common.exceptions import TimeoutException, ElementClickIntercepted
 # --- Constants ---
 MODAL_BACKDROP_SELECTOR   = (By.CLASS_NAME, "modal-two-backdrop")
 CONFIRM_BUTTON_SELECTOR   = (By.CSS_SELECTOR, ".button-solid-norm:nth-child(2)")
-EXTEND_BTN_SELECTOR       = "button.button-outline-weak"
+EXTEND_BTN_SELECTOR       = "//button[normalize-space(text())='Extend']"
 DOWNLOAD_DIR              = os.path.join(os.getcwd(), "downloaded_configs")
 SERVER_ID_LOG_FILE        = os.path.join(os.getcwd(), "downloaded_wg_ids.json")
 MAX_DOWNLOADS_PER_SESSION = 20
@@ -289,7 +289,7 @@ class ProtonVPN:
         print("\n--- Starting Extend All WireGuard Configs ---")
 
         try:
-            total = len(self.driver.find_elements(By.CSS_SELECTOR, EXTEND_BTN_SELECTOR))
+            total = len(self.driver.find_elements(By.XPATH, EXTEND_BTN_SELECTOR))
         except Exception as e:
             print(f"[Extend] Failed to find buttons: {e}")
             return 0
@@ -304,7 +304,7 @@ class ProtonVPN:
         for index in range(total):
             try:
                 # 每次重新查询，防止 StaleElementReferenceException
-                btns = self.driver.find_elements(By.CSS_SELECTOR, EXTEND_BTN_SELECTOR)
+                btns = self.driver.find_elements(By.XPATH, EXTEND_BTN_SELECTOR)
                 if index >= len(btns):
                     print(f"[Extend] Button #{index+1} no longer in DOM, stopping.")
                     break
@@ -313,11 +313,10 @@ class ProtonVPN:
 
                 # 读取配置名称（日志用，失败不影响续期）
                 try:
-                    label = btn.find_element(
-                        By.XPATH,
-                        "./ancestor::*[.//*[contains(text(),'Config to connect')]]"
-                        "//*[contains(text(),'Config to connect')]"
-                    ).text.strip()
+                    row   = btn.find_element(By.XPATH, "./ancestor::tr")
+                    label = row.find_element(By.CSS_SELECTOR, "td:nth-child(1)").text.strip()
+                    if not label:
+                        raise ValueError("empty")
                 except Exception:
                     label = f"Config #{index + 1}"
 
