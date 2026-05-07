@@ -14,13 +14,16 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    
+
     - uses: actions/setup-python@v4
       with:
         python-version: '3.9'
 
     - name: Install Dependencies
       run: pip install selenium requests
+
+    - name: Setup Chrome
+      uses: browser-actions/setup-chrome@v1
 
     - name: Run Downloader Script
       env:
@@ -34,13 +37,16 @@ jobs:
       run: |
         git config --global user.name "GitHub Action Bot"
         git config --global user.email "action@github.com"
-        
+
         if [ -f "ProtonVPN_WireGuard_Configs.zip" ]; then
-          git add ProtonVPN_WireGuard_Configs.zip downloaded_wg_ids.json
-          
-          git commit -m "🔄 Update WireGuard Configs [$(date)]" || echo "No changes to commit"
-          
+          # 生成时间戳文件，确保每次 commit 都有内容变化
+          echo "Updated: $(date -u)" > last_update.txt
+
+          git add ProtonVPN_WireGuard_Configs.zip downloaded_wg_ids.json last_update.txt
+
+          git commit -m "🔄 Update WireGuard Configs [$(date -u '+%a %b %d %H:%M:%S UTC %Y')]"
           git push
         else
           echo "No ZIP file found to upload."
+          exit 1
         fi
